@@ -1,10 +1,11 @@
 #include "protheus.ch"
+#include "topconn.ch"
 
 /*--------------------------------------------------------------------*
-| ADVPL Utils — Funcoes utilitarias genericas para TOTVS Protheus
+| ADVPL Utils — Funcoes utilitarias canônicas para TOTVS Protheus
 | Autor: Eduardo Paranhos
 | Data:  10/08/2026
-| Obs.:  Exemplos genericos — sem dados proprietarios
+| Obs.:  Rotinas reutilizaveis sem dependencias proprietarias
 *---------------------------------------------------------------------*/
 
 /*--------------------------------------------------------------------*
@@ -45,7 +46,7 @@ User Function StrFormat(cValue, cType)
 Return cResult
 
 /*--------------------------------------------------------------------*
-| BusinessDays — Retorna dias uteis entre duas datas
+| BusinessDays — Retorna dias uteis considerando feriados do Protheus
 *---------------------------------------------------------------------*/
 User Function BusinessDays(dStart, dEnd)
 
@@ -55,7 +56,8 @@ User Function BusinessDays(dStart, dEnd)
     Default dEnd := Date()
 
     While dDate <= dEnd
-        If Dow(dDate) != 1 .And. Dow(dDate) != 7 // Nao e domingo (1) nem sabado (7)
+        // Verifica sabado (7), domingo (1) e tabela de feriados Protheus (DataValida)
+        If Dow(dDate) != 1 .And. Dow(dDate) != 7 .And. DataValida(dDate, .T.) == dDate
             nDays++
         EndIf
         dDate := DaySum(dDate, 1)
@@ -64,16 +66,21 @@ User Function BusinessDays(dStart, dEnd)
 Return nDays
 
 /*--------------------------------------------------------------------*
-| AddMonth — Soma/subtrai meses de uma data
+| AddMonth — Soma/subtrai meses com clamp correto do ultimo dia
 *---------------------------------------------------------------------*/
 User Function AddMonth(dDate, nMonths)
 
-    Local nDay := Day(dDate)
-    Local nMonth := Month(dDate) + nMonths
-    Local nYear := Year(dDate)
+    Local nDay     := Day(dDate)
+    Local nMonth   := Month(dDate) + nMonths
+    Local nYear    := Year(dDate)
+    Local dFirstDay
+    Local dLastDay
+    Local nMaxDay  := 31
     Local dResult
 
-    // Ajusta ano
+    Default nMonths := 0
+
+    // Ajusta viradas de ano
     While nMonth > 12
         nMonth -= 12
         nYear++
@@ -83,64 +90,71 @@ User Function AddMonth(dDate, nMonths)
         nYear--
     EndDo
 
-    // Ajusta ultimo dia do mes
-    dResult := StoD(StrZero(nDay, 2) + StrZero(nMonth, 2) + StrZero(nYear, 4))
+    // Calcula ultimo dia valido para o mes/ano de destino (ex: 28/29 fev, 30 abr)
+    dFirstDay := StoD(StrZero(nYear, 4) + StrZero(nMonth, 2) + "01")
+    dLastDay  := LastDay(dFirstDay)
+    nMaxDay   := Day(dLastDay)
+
+    // Clamp para evitar datas invalidas (ex: 31 de fevereiro)
+    nDay := Min(nDay, nMaxDay)
+
+    // Formato canônico StoD: YYYYMMDD
+    dResult := StoD(StrZero(nYear, 4) + StrZero(nMonth, 2) + StrZero(nDay, 2))
 
 Return dResult
 
 /*--------------------------------------------------------------------*
-| ExportToCSV — Exporta consulta SQL para arquivo CSV
+| ExportToCSV — Exporta consulta SQL para arquivo CSV via TCQuery
 *---------------------------------------------------------------------*/
 User Function ExportToCSV(cQuery, cFile)
 
-    Local cLine := ""
+    Local cLine   := ""
     Local nHandle := 0
-    Local aRow := {}
+    Local cAlias  := GetNextAlias()
+    Local nI      := 0
 
     Default cFile := "/tmp/export_" + DtoS(Date()) + "_" + StrTran(Time(), ":", "") + ".csv"
 
-    // Abre arquivo
     nHandle := fCreate(cFile)
     If nHandle == -1
-        MsgAlert("Erro ao criar arquivo: " + cFile, "Export CSV")
+        ConOut("[ExportCSV] Erro ao criar arquivo: " + cFile)
         Return .F.
     EndIf
 
-    // Executa query
-    DbUseArea(.T., "TOPCONN", TCGenQry(Nil, Nil, cQuery), "TMPQRY", .F., .T.)
+    // Executa query de forma compativel com TopConnect
+    TCQuery ChangeQuery(cQuery) New Alias (cAlias)
 
-    // Escreve cabecalho
+    // Cabecalho das colunas
     cLine := ""
-    For nI := 1 To FCount()
-        cLine += FieldName(nI) + ";"
+    For nI := 1 To (cAlias)->(FCount())
+        cLine += (cAlias)->(FieldName(nI)) + ";"
     Next nI
     fWrite(nHandle, cLine + Chr(13) + Chr(10))
 
-    // Escreve dados
-    DbGoTop()
-    While !Eof()
+    // Registros
+    While !(cAlias)->(Eof())
         cLine := ""
-        For nI := 1 To FCount()
-            cLine += cValToChar(FieldGet(nI)) + ";"
+        For nI := 1 To (cAlias)->(FCount())
+            cLine += cValToChar((cAlias)->(FieldGet(nI))) + ";"
         Next nI
         fWrite(nHandle, cLine + Chr(13) + Chr(10))
-        DbSkip()
+        (cAlias)->(DbSkip())
     EndDo
 
     fClose(nHandle)
-    TMPQRY->(DbCloseArea())
+    (cAlias)->(DbCloseArea())
 
-    ConOut("[ExportCSV] Arquivo gerado: " + cFile)
+    ConOut("[ExportCSV] Arquivo gerado com sucesso: " + cFile)
 
 Return .T.
 
 /*--------------------------------------------------------------------*
-| SafeExec — Try-catch padrao para ADVPL
+| SafeExec — Try-catch padrao para ADVPL com ErrorBlock
 *---------------------------------------------------------------------*/
 User Function SafeExec(bBlock, cErrorMsg)
 
     Local xResult := Nil
-    Local bError := ErrorBlock({|e| Break(e)})
+    Local bError  := ErrorBlock({|e| Break(e)})
 
     Default cErrorMsg := "Erro na execucao"
 
@@ -151,7 +165,7 @@ User Function SafeExec(bBlock, cErrorMsg)
         xResult := Nil
     End Sequence
 
-    ErrorBlock(bError) // Restaura handler original
+    ErrorBlock(bError)
 
 Return xResult
 
@@ -184,7 +198,7 @@ User Function PercentOf(nPart, nTotal)
 Return (nPart / nTotal) * 100
 
 /*--------------------------------------------------------------------*
-| ArrayContains — Verifica se array contem valor
+| ArrayContains — Verifica se array contem determinado valor
 *---------------------------------------------------------------------*/
 User Function ArrayContains(aArray, xValue)
-    Return (aScan(aArray, {|x| x == xValue}) > 0)
+Return (aScan(aArray, {|x| x == xValue}) > 0)
