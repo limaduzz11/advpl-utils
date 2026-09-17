@@ -1,5 +1,11 @@
 # ADVPL Utils
 
+<br />
+
+**English** &nbsp;|&nbsp; [Português (Brasil)](README.pt-BR.md)
+
+<br />
+
 Collection of reusable ADVPL utility functions for TOTVS Protheus — string manipulation, date handling, file operations, email, and general helpers.
 
 > **Disclaimer**: Generic utility functions. No business logic or proprietary code.
